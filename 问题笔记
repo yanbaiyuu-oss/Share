@@ -30,7 +30,8 @@ class Config:
         self.CODE_ALIASES = {'代码': '股票代码', '证券代码': '股票代码', '股票代码': '股票代码'}
         # 别名已包含所有常见名称
         self.NAME_ALIASES = {'名称': '股票简称', '股票名称': '股票简称', '股票简称': '股票简称', '简称': '股票简称', '简': '股票简称', '证券名称': '股票简称'} 
-        self.PRICE_ALIASES = {'最新价': '最新价', '现价': '最新价', '当前价格': '最新价'}
+        # === 价格别名修复 v2：新增 '收盘价'，涵盖更多实时行情价格字段 ===
+        self.PRICE_ALIASES = {'最新价': '最新价', '现价': '最新价', '当前价格': '最新价', '今收盘': '最新价', '收盘': '最新价', '收盘价': '最新价'}
 
 
 def format_stock_code(code: str) -> str:
@@ -144,6 +145,12 @@ class StockAnalyzer:
         df.dropna(subset=['股票代码'], inplace=True)
         df.drop_duplicates(subset=['股票代码'], inplace=True)
         df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
+
+        # === 核心修复点：强制对 '最新价' 字段进行数值转换 ===
+        if '最新价' in df.columns:
+            # 使用 errors='coerce' 将任何非数字值强制转换为 NaN，确保列类型为 float
+            df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
+        # ========================================================
 
         # 3. 过滤ST股 (依赖 '股票简称' 列)
         if '股票简称' not in df.columns:
@@ -518,28 +525,28 @@ class StockAnalyzer:
         if not all_codes: return pd.DataFrame()
         final_df = pd.DataFrame(list(all_codes), columns=['股票代码'])
 
-        # 2. 【重构】更加鲁棒地合并基础信息 (简称, 价格)
+        # 2. 鲁棒地合并基础信息 (简称, 价格)
         spot_df = processed_data.get('spot_data_all', pd.DataFrame())
         report_df_base = processed_data.get('processed_main_report', pd.DataFrame())
 
         # 2a. 构建名称源：从实时行情和研报数据中收集名称
-        # 确保列存在且数据已清洗
         name_source_spot = spot_df[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in spot_df.columns else pd.DataFrame()
         name_source_report = report_df_base[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in report_df_base.columns else pd.DataFrame()
 
         # 2b. 合并所有名称源：优先使用实时行情 (spot_df) 的名称
-        # keep='first' 保证 spot_df 的名称优先
         all_names = pd.concat([name_source_spot, name_source_report]).drop_duplicates(subset=['股票代码'], keep='first')
         
         # 2c. 合并名称和价格到最终报告
         final_df = pd.merge(final_df, all_names, on='股票代码', how='left')
         
         # 合并价格 (仅从实时行情获取)
+        # 注意：这里的 spot_df 已经过 _clean_and_standardize 处理，其 '最新价' 已经是数值类型或 NaN
         price_source = spot_df[['股票代码', '最新价']].drop_duplicates(subset=['股票代码'])
         final_df = pd.merge(final_df, price_source, on='股票代码', how='left')
         
         # 2d. 填充空值
         final_df['股票简称'] = final_df['股票简称'].fillna('N/A')
+        # 将价格的 NaN 填充为 'N/A'
         final_df['最新价'] = final_df['最新价'].fillna('N/A')
 
 
@@ -703,7 +710,8 @@ class StockAnalyzer:
                     max_len = max(df[col].astype(str).str.len().max(), len(col))
                     col_width = min(max_len + 2, 30)
 
-                    if '价格' in col or '价' in col or '值' in col or '线' in col:
+                    # 修复：确保 '最新价' 列被正确识别为货币格式
+                    if col == '最新价' or '价格' in col or '价' in col or '值' in col or '线' in col:
                         worksheet.set_column(i, i, col_width, currency_format)
                     elif '代码' in col:
                         worksheet.set_column(i, i, 10, code_format)
@@ -730,18 +738,8 @@ class StockAnalyzer:
                     pass
         print("旧的临时数据文件清理完成。")
 
-        # --- 【关键修复】强制清除实时行情缓存，确保股票简称的修复生效 ---
-        spot_cache_path = self._get_file_path("A股实时行情", cleaned=True)
-        if os.path.exists(spot_cache_path):
-            try:
-                os.remove(spot_cache_path)
-                print(f"[FIX] 强制清除了【A股实时行情】缓存: {os.path.basename(spot_cache_path)}，下次运行时将重新获取数据。")
-            except Exception as e:
-                print(f"[WARN] 无法清除实时行情缓存: {e}")
-        # -----------------------------------------------------
-
         try:
-            # 1. 获取所有原始数据 (将强制重新获取 A股实时行情)
+            # 1. 获取所有原始数据 
             raw_data = self._get_all_raw_data()
 
             # 预处理主力研报数据
