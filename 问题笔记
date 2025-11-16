@@ -491,7 +491,7 @@ class StockAnalyzer:
         return filtered_df.fillna('N/A')
 
     def _consolidate_data(self, processed_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """合并所有数据源和信号，生成最终汇总报告，将技术指标作为独立列输出。"""
+        """【已重构股票简称获取】合并所有数据源和信号，生成最终汇总报告，将技术指标作为独立列输出。"""
         print("\n>>> 正在汇总所有数据和信号 (技术指标作为独立列)...")
 
         # 1. 提取所有有信号的股票代码作为基础
@@ -518,17 +518,30 @@ class StockAnalyzer:
         if not all_codes: return pd.DataFrame()
         final_df = pd.DataFrame(list(all_codes), columns=['股票代码'])
 
-        # 2. 合并基础信息 (简称, 价格)
+        # 2. 【重构】更加鲁棒地合并基础信息 (简称, 价格)
         spot_df = processed_data.get('spot_data_all', pd.DataFrame())
-        # 这里依赖于 _clean_and_standardize 已经将名称标准化为 '股票简称'
-        name_source = spot_df[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码'])
-        price_source = spot_df[['股票代码', '最新价']].drop_duplicates(subset=['股票代码'])
+        report_df_base = processed_data.get('processed_main_report', pd.DataFrame())
+
+        # 2a. 构建名称源：从实时行情和研报数据中收集名称
+        # 确保列存在且数据已清洗
+        name_source_spot = spot_df[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in spot_df.columns else pd.DataFrame()
+        name_source_report = report_df_base[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in report_df_base.columns else pd.DataFrame()
+
+        # 2b. 合并所有名称源：优先使用实时行情 (spot_df) 的名称
+        # keep='first' 保证 spot_df 的名称优先
+        all_names = pd.concat([name_source_spot, name_source_report]).drop_duplicates(subset=['股票代码'], keep='first')
         
-        final_df = pd.merge(final_df, name_source, on='股票代码', how='left')
+        # 2c. 合并名称和价格到最终报告
+        final_df = pd.merge(final_df, all_names, on='股票代码', how='left')
+        
+        # 合并价格 (仅从实时行情获取)
+        price_source = spot_df[['股票代码', '最新价']].drop_duplicates(subset=['股票代码'])
         final_df = pd.merge(final_df, price_source, on='股票代码', how='left')
         
+        # 2d. 填充空值
         final_df['股票简称'] = final_df['股票简称'].fillna('N/A')
         final_df['最新价'] = final_df['最新价'].fillna('N/A')
+
 
         # 3. 合并信号和细节
         # A. 主力研报信号 (使用买入次数)
@@ -717,7 +730,7 @@ class StockAnalyzer:
                     pass
         print("旧的临时数据文件清理完成。")
 
-        # --- 【已修改】强制清除实时行情缓存，确保股票简称的修复生效 ---
+        # --- 【关键修复】强制清除实时行情缓存，确保股票简称的修复生效 ---
         spot_cache_path = self._get_file_path("A股实时行情", cleaned=True)
         if os.path.exists(spot_cache_path):
             try:
