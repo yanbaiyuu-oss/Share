@@ -228,7 +228,7 @@ class StockAnalyzer:
                     
                     # 基础清洗和标准化：代码格式化
                     if '股票代码' in constituents_df.columns:
-                        constituents_df['股票代码'] = constituents_df['股票代码'].astype(str).str.zfill(6)
+                        constituents_df['股票代码'] = constituents_df['股票代码'].astype(str).zfill(6)
                         constituents_df['所属板块'] = industry_name
                         
                         # 仅保留代码和板块信息，并去重
@@ -258,7 +258,19 @@ class StockAnalyzer:
         cache_name = f"MACD_hist_data_cache_{len(codes)}"
         file_path = self._get_file_path(cache_name, cleaned=True)
         cached_df = self._load_data_from_cache(file_path)
+        
         if not cached_df.empty:
+            # FIX 1: 如果缓存中是 'date' 字段，则重命名为 '日期'，以兼容 AKShare 的输出
+            if 'date' in cached_df.columns:
+                cached_df.rename(columns={'date': '日期'}, inplace=True)
+            # FIX 2: 如果缓存中是 'close' 字段，则重命名为 '收盘'
+            if 'close' in cached_df.columns:
+                cached_df.rename(columns={'close': '收盘'}, inplace=True)
+            
+            # 确保 '日期' 字段存在且格式正确
+            if '日期' in cached_df.columns:
+                 cached_df['日期'] = pd.to_datetime(cached_df['日期']).dt.strftime('%Y-%m-%d')
+            
             return cached_df
 
         all_data = []
@@ -279,6 +291,13 @@ class StockAnalyzer:
                 try:
                     hist_df = future.result()
                     if hist_df is not None and not hist_df.empty:
+                        # 再次检查 'date' 字段，以防 akshare 接口未来变化
+                        if 'date' in hist_df.columns:
+                            hist_df.rename(columns={'date': '日期'}, inplace=True)
+                        # NEW FIX: 检查 'close' 字段，以防 akshare 接口未来变化
+                        if 'close' in hist_df.columns:
+                            hist_df.rename(columns={'close': '收盘'}, inplace=True)
+                            
                         hist_df['股票代码'] = code
                         # 确保日期是字符串格式
                         if '日期' in hist_df.columns:
@@ -316,6 +335,7 @@ class StockAnalyzer:
                 continue
 
             # 确保 '收盘' 列是数字类型
+            # NOTE: 由于 _fetch_hist_data_parallel 已经将 'close' 统一命名为 '收盘'，这里直接使用 '收盘'
             df['收盘'] = pd.to_numeric(df['收盘'], errors='coerce')
             df.dropna(subset=['收盘'], inplace=True)
             if df.empty: continue
@@ -717,11 +737,3 @@ class StockAnalyzer:
         finally:
             end_time = time.time()
             print(f"\n>>> 流程结束。总耗时: {timedelta(seconds=end_time - self.start_time)}")
-
-
-# ==============================================================================
-# 主执行入口
-# ==============================================================================
-if __name__ == '__main__':
-    analyzer = StockAnalyzer()
-    analyzer.run()
