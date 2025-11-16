@@ -28,8 +28,8 @@ class Config:
         self.DATA_FETCH_DELAY = 5
         self.MAX_WORKERS = 15
         self.CODE_ALIASES = {'代码': '股票代码', '证券代码': '股票代码', '股票代码': '股票代码'}
-        # 【已修改】增加 '简称' alias，修复股票简称 N/A 问题
-        self.NAME_ALIASES = {'名称': '股票简称', '股票名称': '股票简称', '股票简称': '股票简称', '简称': '股票简称'} 
+        # 【此处已修改】扩展 NAME_ALIASES，增加 '简' 和 '证券名称'，确保捕获股票简称
+        self.NAME_ALIASES = {'名称': '股票简称', '股票名称': '股票简称', '股票简称': '股票简称', '简称': '股票简称', '简': '股票简称', '证券名称': '股票简称'} 
         self.PRICE_ALIASES = {'最新价': '最新价', '现价': '最新价', '当前价格': '最新价'}
 
 
@@ -125,10 +125,10 @@ class StockAnalyzer:
         return cleaned_df
 
     def _clean_and_standardize(self, df: pd.DataFrame, df_name: str) -> pd.DataFrame:
-        """通用数据清洗和列名标准化。"""
+        """【已优化】通用数据清洗和列名标准化，增强名称捕获。"""
         if df.empty: return df
 
-        # 1. 标准化列名
+        # 1. 标准化列名：使用 Config 中的别名映射
         for old, new in self.config.CODE_ALIASES.items():
             if old in df.columns: df.rename(columns={old: new}, inplace=True)
         for old, new in self.config.NAME_ALIASES.items():
@@ -145,11 +145,8 @@ class StockAnalyzer:
         df.drop_duplicates(subset=['股票代码'], inplace=True)
         df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
 
-        # 3. 过滤ST股 (需要 '股票简称' 列，如果缺失则临时用代码)
-        # 为处理 akshare 返回的原始数据，可能没有“股票简称”，这里先尝试处理，如果缺失则在过滤ST时会用到。
-        if '股票简称' not in df.columns and '名称' in df.columns:
-            df.rename(columns={'名称': '股票简称'}, inplace=True)
-
+        # 3. 过滤ST股 (需要 '股票简称' 列)
+        # 移除了冗余的 '名称' 检查代码，现在完全依赖 Config 中的 NAME_ALIASES
         if '股票简称' not in df.columns:
             # 如果没有简称，就无法过滤 ST 股，但仍返回清洗过代码格式的 DF
             cleaned_df = df.copy()
@@ -495,7 +492,7 @@ class StockAnalyzer:
         return filtered_df.fillna('N/A')
 
     def _consolidate_data(self, processed_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """【已修改】合并所有数据源和信号，生成最终汇总报告，将技术指标作为独立列输出。"""
+        """合并所有数据源和信号，生成最终汇总报告，将技术指标作为独立列输出。"""
         print("\n>>> 正在汇总所有数据和信号 (技术指标作为独立列)...")
 
         # 1. 提取所有有信号的股票代码作为基础
@@ -524,20 +521,21 @@ class StockAnalyzer:
 
         # 2. 合并基础信息 (简称, 价格)
         spot_df = processed_data.get('spot_data_all', pd.DataFrame())
+        # 这里依赖于 _clean_and_standardize 已经将名称标准化为 '股票简称'
         name_source = spot_df[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码'])
         price_source = spot_df[['股票代码', '最新价']].drop_duplicates(subset=['股票代码'])
+        
         final_df = pd.merge(final_df, name_source, on='股票代码', how='left')
         final_df = pd.merge(final_df, price_source, on='股票代码', how='left')
+        
         final_df['股票简称'] = final_df['股票简称'].fillna('N/A')
         final_df['最新价'] = final_df['最新价'].fillna('N/A')
 
         # 3. 合并信号和细节
         # A. 主力研报信号 (使用买入次数)
-        # 注意：这里的 report_df 已经是 run 方法中过滤后的结果，因此只包含买入次数 >= 1 的股票
         report_df = processed_data['processed_main_report'][['股票代码', '机构投资评级(近六个月)-买入']]
         report_df.rename(columns={'机构投资评级(近六个月)-买入': '研报买入次数'}, inplace=True)
         final_df = pd.merge(final_df, report_df, on='股票代码', how='left')
-        # 如果 merge 过来是 NaN，则说明该股票不在过滤后的研报列表中，买入次数为 0
         final_df['研报买入次数'] = pd.to_numeric(final_df['研报买入次数'], errors='coerce').fillna(0).astype(int) 
 
         # B. 均线信号 (多头排列)
@@ -622,8 +620,7 @@ class StockAnalyzer:
         
         # 4. 过滤掉没有任何主要信号的股票
         def has_any_signal(row):
-            # 更新信号检查逻辑：包含新的 TA 信号列
-            # 注意：由于研报数据已经在 run() 中过滤，此处只需检查是否大于0即可
+            # 这里的研报买入次数列在 run() 方法中已过滤，且在 merge 填充 NaN 为 0，故此处检查 > 0 即可
             return (row['研报买入次数'] > 0 or
                     row['完全多头排列'] == '是' or
                     row['强势股'] == '是' or
@@ -709,7 +706,7 @@ class StockAnalyzer:
             raise
 
     def run(self):
-        """【已修改】主运行方法：新增主力研报过滤逻辑。"""
+        """主运行方法。"""
         print(f"股票分析程序启动 (Today: {self.today_str})")
 
         # 清理旧的临时文件 (只清理当日文件以外的)
@@ -729,7 +726,7 @@ class StockAnalyzer:
             processed_main_report = raw_data.get('main_report_raw', pd.DataFrame())
             spot_df = raw_data.get('spot_data_all', pd.DataFrame())
 
-            # --- 【新增】对主力研报数据进行条件过滤 ---
+            # --- 对主力研报数据进行条件过滤 (买入评级 >= 1) ---
             report_col = '机构投资评级(近六个月)-买入'
             if not processed_main_report.empty and report_col in processed_main_report.columns:
                 # 确保过滤列是数字类型
