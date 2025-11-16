@@ -501,7 +501,7 @@ class StockAnalyzer:
         """【已按用户要求使用股票简称进行价格关联】合并所有数据源和信号，生成最终汇总报告。"""
         print("\n>>> 正在汇总所有数据和信号 (技术指标作为独立列)...")
 
-        # 1. 提取所有有信号的股票代码作为基础
+        # 1. 提取所有有信号的股票代码作为基础 (V6: 由于输入数据源已经被 run() 严格过滤，这里收集的 codes 就是最终 Universe)
         all_codes = set()
         data_sources = [
             processed_data.get('processed_main_report'),
@@ -718,53 +718,6 @@ class StockAnalyzer:
 
         return final_df
 
-    def _generate_report(self, sheets_data: Dict[str, pd.DataFrame]):
-        """生成 Excel 报告。"""
-        print(f"\n>>> 正在生成 Excel 报告...")
-        report_path = os.path.join(self.config.SAVE_DIRECTORY, f"股票筛选报告_{self.today_str}.xlsx")
-
-        try:
-            writer = pd.ExcelWriter(report_path, engine='xlsxwriter')
-            workbook = writer.book
-
-            # 定义格式
-            header_format = workbook.add_format(
-                {'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#D7E4BC', 'border': 1})
-            currency_format = workbook.add_format({'num_format': '#,##0.00'})
-            code_format = workbook.add_format({'num_format': '@'})  # 文本格式
-
-            for sheet_name, df in sheets_data.items():
-                if df is None or df.empty:
-                    print(f"  - 警告：工作表 '{sheet_name}' 数据为空，跳过创建。")
-                    continue
-
-                df.to_excel(writer, sheet_name=sheet_name, startrow=1, header=False, index=False)
-                worksheet = writer.sheets[sheet_name]
-
-                # 写入表头
-                for col_num, value in enumerate(df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-
-                # 设置列宽和格式
-                for i, col in enumerate(df.columns):
-                    max_len = max(df[col].astype(str).str.len().max(), len(col))
-                    col_width = min(max_len + 2, 30)
-
-                    # 修复：确保 '最新价' 列被正确识别为货币格式
-                    if col == '最新价' or '价格' in col or '价' in col or '线' in col or '均线' in col:
-                        worksheet.set_column(i, i, col_width, currency_format)
-                    elif '代码' in col:
-                        worksheet.set_column(i, i, 10, code_format)
-                    else:
-                        worksheet.set_column(i, i, col_width)
-
-            writer.close()
-            print(f"  - 报告已成功生成并保存到: {report_path}")
-
-        except Exception as e:
-            print(f"[FATAL] 致命错误：生成 Excel 报告失败。原因: {e}")
-            raise
-
     def run(self):
         """主运行方法。"""
         print(f"股票分析程序启动 (Today: {self.today_str})")
@@ -825,9 +778,36 @@ class StockAnalyzer:
             # 3. 技术指标信号提取
             ta_signals = self._process_ta_signals(filtered_codes_list, hist_df_all, spot_df)
             print(">>> 股票历史数据和技术指标分析完成。")
+            
+            # --- V6 修复：定义统一的股票筛选集，确保最终报告只包含分析的股票 ---
+            universe_codes_set = set(filtered_codes_list) 
+            
+            def filter_df_by_universe(df, universe_set):
+                """将数据框限制在核心分析股票集合内。"""
+                if df is None or df.empty or '股票代码' not in df.columns:
+                    return pd.DataFrame()
+                # 确保代码类型一致，以便于集合操作
+                df['股票代码'] = df['股票代码'].astype(str) 
+                return df[df['股票代码'].isin(universe_set)].copy()
 
-            # 4. 特殊数据处理
+            # 4. 特殊数据处理和筛选 (必须对可能引入新代码的数据进行过滤)
+            
+            # A. 均线突破数据处理 (先处理，再对结果进行过滤)
             processed_xstp_df = self._process_xstp_and_filter(raw_data, spot_df)
+            processed_xstp_df = filter_df_by_universe(processed_xstp_df, universe_codes_set)
+            
+            # B. 过滤其他每日排名数据 (直接过滤原始数据，因为它们在 _consolidate_data 中被用作 signal source)
+            raw_data['market_fund_flow_raw'] = filter_df_by_universe(raw_data['market_fund_flow_raw'], universe_codes_set)
+            raw_data['strong_stocks_raw'] = filter_df_by_universe(raw_data['strong_stocks_raw'], universe_codes_set)
+            raw_data['consecutive_rise_raw'] = filter_df_by_universe(raw_data['consecutive_rise_raw'], universe_codes_set)
+            raw_data['ljqs_raw'] = filter_df_by_universe(raw_data['ljqs_raw'], universe_codes_set)
+            raw_data['cxfl_raw'] = filter_df_by_universe(raw_data['cxfl_raw'], universe_codes_set)
+            
+            # C. 行业板块成分股 (此表只用于报告输出，但过滤可确保一致性)
+            raw_data['top_industry_cons_df'] = filter_df_by_universe(raw_data['top_industry_cons_df'], universe_codes_set)
+            
+            print(f">>> 已将所有信号数据源限制在 {len(universe_codes_set)} 个核心股票代码内。")
+            # --- V6 修复结束 ---
 
             # 5. 合并所有数据源和信号
             processed_data = {
@@ -843,7 +823,7 @@ class StockAnalyzer:
             sheets_data = {
                 '数据汇总': consolidated_report,  # 替换为数据汇总表
                 '主力研报筛选': processed_data['processed_main_report'],
-                '均线多头排列': processed_xstp_df,  # 使用处理后的数据
+                '均线多头排列': processed_xstp_df,  # 使用处理后且过滤后的数据
                 '实时行情': spot_df,  # 使用清洗后的数据
                 '市场资金流向': raw_data['market_fund_flow_raw'],
                 '强势股池': raw_data['strong_stocks_raw'],
