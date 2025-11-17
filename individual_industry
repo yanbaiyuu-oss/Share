@@ -1,0 +1,93 @@
+import akshare as ak
+import pandas as pd
+import time
+
+def fetch_and_write_individual_info(output_filename="individual_info_brief.txt"):
+    """
+    获取 A 股代码，逐一查询个股信息，并仅提取 '代码', '简称', '行业' 写入文件。
+    """
+    print("🚀 步骤 1: 正在获取所有 A 股代码 (stock_zh_a_spot_em)...")
+    try:
+        # 获取所有 A 股实时行情数据
+        stock_spot_df = ak.stock_zh_a_spot_em()
+    except Exception as e:
+        print(f"❌ 错误: 获取 stock_zh_a_spot_em 失败: {e}")
+        return
+
+    # 仅保留 '代码' 列用于后续查询
+    if '代码' not in stock_spot_df.columns:
+        print("❌ 错误: 实时行情数据中未找到 '代码' 列。")
+        return
+
+    stock_codes = stock_spot_df['代码'].astype(str).tolist()
+    
+    # 用于存储最终目标信息的列表
+    final_info_list = []
+    
+    print(f"📈 步骤 2: 发现 {len(stock_codes)} 个股票。开始逐一查询个股信息 (STOCK_INDIVIDUAL_INFO_EM)...")
+    
+    total_stocks = len(stock_codes)
+    
+    # 遍历所有股票代码，查询个股信息
+    for index, code in enumerate(stock_codes, 1):
+        print(f"   - 正在处理 {index}/{total_stocks}: 股票代码 {code}...", end='\r', flush=True)
+        try:
+            # 查询个股信息
+            individual_df = ak.stock_individual_info_em(symbol=code)
+            
+            if not individual_df.empty:
+                # 假设只取第一条数据
+                info_dict = individual_df.iloc[0].to_dict()
+                
+                # 提取目标字段。注意：
+                # '股票代码' 在 akshare 的返回中通常是 '代码'
+                # '股票简称' 在 akshare 的返回中可能是 '名称' 或 '简称'
+                # '行业' 在 akshare 的返回中可能是 '所属行业'
+                # 这里根据经验使用常见列名，若运行出错请根据实际返回调整。
+                
+                selected_info = {
+                    '股票代码': code,
+                    '股票简称': info_dict.get('股票简称', info_dict.get('名称', 'N/A')), # 尝试获取 '股票简称' 或 '名称'
+                    '所属行业': info_dict.get('所属行业', 'N/A')
+                }
+                
+                # 只有当 '所属行业' 不是 'N/A' 时才视为有效数据添加
+                if selected_info['所属行业'] != 'N/A':
+                    final_info_list.append(selected_info)
+            
+            # 建议添加短暂延迟
+            time.sleep(0.05) 
+            
+        except Exception as e:
+            # 遇到错误时也稍作等待，并打印警告
+            print(f"\n   - ⚠️ 警告: 查询股票 {code} 的个股信息失败: {e}. 跳过.")
+            time.sleep(0.1)
+
+    print("\n✅ 步骤 2 完成: 所有个股信息查询完毕。")
+
+    # 转换为 DataFrame
+    final_df = pd.DataFrame(final_info_list)
+    
+    if final_df.empty:
+        print("❌ 错误: 未能获取到任何有效的个股信息，无法写入文件。")
+        return
+
+    print(f"📝 步骤 3: 正在将 {len(final_df)} 条数据写入文件: {output_filename}...")
+    
+    try:
+        # 将最终的 DataFrame 写入本地文件
+        final_df.to_csv(
+            output_filename, 
+            sep='\t', 
+            index=False, 
+            encoding='utf-8', 
+            header=True
+        )
+        print(f"🎉 成功: 数据已写入到文件: {output_filename}")
+    except Exception as e:
+        print(f"❌ 错误: 写入文件失败: {e}")
+
+# 执行主函数
+if __name__ == "__main__":
+    # 使用用户指定的原始文件名
+    fetch_and_write_individual_info(output_filename="spot.txt")
