@@ -190,7 +190,7 @@ class StockAnalyzer:
         data['xstp_30_raw'] = self._safe_ak_fetch(ak.stock_rank_xstp_ths, "向上突破30日均线", symbol="30日均线")
         data['xstp_60_raw'] = self._safe_ak_fetch(ak.stock_rank_xstp_ths, "向上突破60日均线", symbol="30日均线")
 
-        # 3. 行业板块数据 (成分股需要实时获取，不适合缓存)
+        # 3. 行业板块数据
         print("\n>>> 正在获取行业板块成分股...")
         industry_board_df = self._safe_ak_fetch(ak.stock_board_industry_name_em, '行业板块名称')
         # 注意：这里 Top Industry Constituent 的缓存名需要独立，以避免与 _safe_ak_fetch 冲突
@@ -199,8 +199,25 @@ class StockAnalyzer:
 
         return data
 
+    def _safe_fetch_constituents(self, symbol: str) -> pd.DataFrame:
+        """
+        【优化新增】带重试机制获取单个行业板块的成分股。
+        """
+        df = pd.DataFrame()
+        for i in range(self.config.DATA_FETCH_RETRIES):
+            try:
+                # print(f"  - 尝试获取 {symbol} 成分股 (第 {i + 1}/{self.config.DATA_FETCH_RETRIES} 次)")
+                df = ak.stock_board_industry_cons_em(symbol=symbol)
+                if df is not None and not df.empty:
+                    return df
+                else:
+                    time.sleep(self.config.DATA_FETCH_DELAY)
+            except Exception:
+                time.sleep(self.config.DATA_FETCH_DELAY)
+        return pd.DataFrame()
+
     def _get_top_industry_constituents(self, industry_board_df: pd.DataFrame) -> pd.DataFrame:
-        """获取涨幅前10板块的成分股。"""
+        """获取涨幅前10板块的成分股 (已优化：使用带重试的 fetcher)。"""
         if industry_board_df.empty or '板块名称' not in industry_board_df.columns:
             return pd.DataFrame()
 
@@ -217,8 +234,8 @@ class StockAnalyzer:
         # 使用 ThreadPoolExecutor 并行获取成分股
         future_to_industry = {
             self.executor.submit(
-                # 由于这是短时获取且清洗逻辑简单，这里直接使用 ak.stock_board_industry_cons_em
-                ak.stock_board_industry_cons_em,
+                # 调用新的带重试的辅助函数
+                self._safe_fetch_constituents,
                 symbol=row['板块名称']
             ): row['板块名称']
             for _, row in top_industries.iterrows()
@@ -227,7 +244,7 @@ class StockAnalyzer:
         for future in as_completed(future_to_industry):
             industry_name = future_to_industry[future]
             try:
-                constituents_df = future.result()
+                constituents_df = future.result() # 这里的 result 是已经尝试重试后的结果
                 if constituents_df is not None and not constituents_df.empty:
                     if '代码' in constituents_df.columns:
                         constituents_df.rename(columns={'代码': '股票代码'}, inplace=True)
@@ -240,9 +257,12 @@ class StockAnalyzer:
                         # 仅保留代码和板块信息，并去重
                         cleaned_constituents = constituents_df[['股票代码', '所属板块']].drop_duplicates()
                     all_constituents.append(cleaned_constituents)
+                else:
+                    print(f"[WARN] 警告：获取 {industry_name} 的成分股失败或数据为空 (已重试 {self.config.DATA_FETCH_RETRIES} 次)。")
 
             except Exception as e:
-                print(f"[ERROR] 错误：获取 {industry_name} 的成分股时出错: {e}")
+                # 理论上这里的 Exception 应该很少触发，因为重试逻辑已经在 _safe_fetch_constituents 中处理
+                print(f"[ERROR] 错误：获取 {industry_name} 的成分股时发生未知错误: {e}")
 
         if all_constituents:
             final_df = pd.concat(all_constituents, ignore_index=True).drop_duplicates(subset=['股票代码'])
