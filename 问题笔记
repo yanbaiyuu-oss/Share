@@ -6,7 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 from typing import Callable, Dict, Any, List
-import pandas_ta as ta
+import pandas_ta as ta  # 保留 pandas_ta 用于其他指标 (KDJ, BOLL等)
 import numpy as np
 import xlsxwriter
 
@@ -350,6 +350,48 @@ class StockAnalyzer:
             return merged_df
         return pd.DataFrame()
 
+    # ==========================================================================
+    # [新增] MACD 自定义计算方法 (替代 pandas_ta)
+    # ==========================================================================
+    def _custom_macd(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        [自定义实现] 计算 MACD 指标 (EMA12, EMA26, DIF, DEA, MACD_CROSS)。
+        替代 pandas_ta 库，使用 pandas.ewm(adjust=False)。
+        """
+        # 确保 'close' 列存在且是数字类型
+        if 'close' not in df.columns:
+            return df
+
+        close = df['close']
+
+        # 1. 计算 12 日 EMA (快线)
+        # adjust=False 确保权重符合技术分析的传统公式
+        df['EMA_12'] = close.ewm(span=12, adjust=False).mean()
+
+        # 2. 计算 26 日 EMA (慢线)
+        df['EMA_26'] = close.ewm(span=26, adjust=False).mean()
+
+        # 3. 计算 DIF (快线)
+        df['DIF'] = df['EMA_12'] - df['EMA_26']
+
+        # 4. 计算 DEA (信号线/慢线), 周期为 9
+        df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+
+        # 5. 计算 MACDH (柱状线)
+        df['MACDH'] = df['DIF'] - df['DEA']
+
+        # 6. 判断 MACD 金叉信号 (MACDH 由负转正)
+        # 条件：当前 MACDH > 0 且 前一日 MACDH <= 0
+        df['MACD_CROSS'] = np.where(
+            (df['MACDH'] > 0) & (df['MACDH'].shift(1).fillna(0) <= 0), 1, 0)
+
+        # 清理中间计算列以保持整洁
+        df.drop(columns=['EMA_12', 'EMA_26', 'DIF', 'DEA', 'MACDH'], inplace=True, errors='ignore')
+
+        return df
+    # ==========================================================================
+
+
     def _process_ta_signals(self, all_codes: List[str], hist_df_all: pd.DataFrame, spot_df: pd.DataFrame) -> Dict[
         str, pd.DataFrame]:
         """计算并提取所有技术指标信号。"""
@@ -385,23 +427,18 @@ class StockAnalyzer:
                 continue
 
             try:
-                # 1. MACD (金叉)
-                # 由于列名已标准化，MACD可以直接计算
-                df.ta.macd(append=True, fast=12, slow=26, signal=9, close='close')
-                macd_cols = [col for col in df.columns if
-                             col.startswith('MACD_') or col.startswith('MACDH_') or col.startswith('MACDS_')]
-                if len(macd_cols) >= 3:
-                    # 获取 MACDH (柱状线) 的列名，确保它是存在的
-                    macd_h_col = [col for col in macd_cols if col.startswith('MACDH_')][0]
-                    # 找到最近的金叉信号: DIF 穿过 DEA，或 MACDH 由负转正
-                    # 这里使用 MACDH 由负转正 (MACDH > 0 and MACDH.shift(1) <= 0)
-                    df['MACD_CROSS'] = np.where(
-                        (df[macd_h_col] > 0) & (df[macd_h_col].shift(1) <= 0), 1, 0)
+                # 1. MACD (金叉) - **使用自定义实现**
+                df = self._custom_macd(df)
+
+                # 提取信号，无需复杂的列名匹配
+                if 'MACD_CROSS' in df.columns:
                     if df['MACD_CROSS'].iloc[-1] == 1:
                         # 仅记录信号，不包含评分
                         ta_signals['MACD'].append({'股票代码': code, 'MACD_Signal': '金叉'})
+                # --- MACD 自定义计算结束 ---
 
-                # 2. KDJ (超卖区金叉)
+
+                # 2. KDJ (超卖区金叉) - 使用 pandas_ta
                 df.ta.stoch(append=True, close='close', high='high', low='low')
                 kdj_cols = [col for col in df.columns if col.startswith('STOCHk_') or col.startswith('STOCHd_')]
                 if len(kdj_cols) >= 2:
@@ -418,7 +455,7 @@ class StockAnalyzer:
                         # 仅记录信号，不包含评分
                         ta_signals['KDJ'].append({'股票代码': code, 'KDJ_Signal': '超卖区金叉'})
 
-                # 3. CCI (超卖)
+                # 3. CCI (超卖) - 使用 pandas_ta
                 df.ta.cci(append=True, close='close', high='high', low='low')
                 cci_cols = [col for col in df.columns if col.startswith('CCI_')]
                 if cci_cols:
@@ -428,7 +465,7 @@ class StockAnalyzer:
                         ta_signals['CCI'].append(
                             {'股票代码': code, 'CCI_Signal': f"超卖 ({df[cci_col].iloc[-1]:.2f})"})
 
-                # 4. RSI (超卖低位)
+                # 4. RSI (超卖低位) - 使用 pandas_ta
                 df.ta.rsi(append=True, close='close')
                 rsi_cols = [col for col in df.columns if col.startswith('RSI_')]
                 if rsi_cols:
@@ -438,7 +475,7 @@ class StockAnalyzer:
                         ta_signals['RSI'].append(
                             {'股票代码': code, 'RSI_Signal': f"超卖低位 ({df[rsi_col].iloc[-1]:.2f})"})
 
-                # 5. BOLL (低波/缩口)
+                # 5. BOLL (低波/缩口) - 使用 pandas_ta
                 df.ta.bbands(append=True, length=20, std=2, close='close')
                 boll_cols = [col for col in df.columns if col.startswith('BBL_')]
                 if boll_cols:
