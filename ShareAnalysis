@@ -29,9 +29,11 @@ class Config:
         self.MAX_WORKERS = 15
         self.CODE_ALIASES = {'代码': '股票代码', '证券代码': '股票代码', '股票代码': '股票代码'}
         # 别名已包含所有常见名称
-        self.NAME_ALIASES = {'名称': '股票简称', '股票名称': '股票简称', '股票简称': '股票简称', '简称': '股票简称', '简': '股票简称', '证券名称': '股票简称'} 
+        self.NAME_ALIASES = {'名称': '股票简称', '股票名称': '股票简称', '股票简称': '股票简称', '简称': '股票简称',
+                             '简': '股票简称', '证券名称': '股票简称'}
         # === 价格别名修复 v5：涵盖更多实时行情价格字段 ===
-        self.PRICE_ALIASES = {'最新价': '最新价', '现价': '最新价', '当前价格': '最新价', '今收盘': '最新价', '收盘': '最新价', '收盘价': '最新价'}
+        self.PRICE_ALIASES = {'最新价': '最新价', '现价': '最新价', '当前价格': '最新价', '今收盘': '最新价',
+                              '收盘': '最新价', '收盘价': '最新价'}
 
 
 def format_stock_code(code: str) -> str:
@@ -190,7 +192,7 @@ class StockAnalyzer:
 
         # 3. 行业板块数据 (成分股需要实时获取，不适合缓存)
         print("\n>>> 正在获取行业板块成分股...")
-        industry_board_df = self._safe_ak_fetch(ak.stock_board_industry_summary_ths, '行业板块名称')
+        industry_board_df = self._safe_ak_fetch(ak.stock_board_industry_name_em, '行业板块名称')
         # 注意：这里 Top Industry Constituent 的缓存名需要独立，以避免与 _safe_ak_fetch 冲突
         data['top_industry_cons_df'] = self._get_top_industry_constituents(industry_board_df)
         data['industry_board_df'] = industry_board_df  # 原始板块名称用于报告
@@ -480,10 +482,10 @@ class StockAnalyzer:
         filtered_df = xstp_base[
             (xstp_base['最新价'] > xstp_base['10日均线最新价']) &
             (
-                (xstp_base['10日均线最新价'] > xstp_base['30日均线最新价'].fillna(float('-inf'))) |
-                (xstp_base['30日均线最新价'] > xstp_base['60日均线最新价'].fillna(float('-inf')))
+                    (xstp_base['10日均线最新价'] > xstp_base['30日均线最新价'].fillna(float('-inf'))) |
+                    (xstp_base['30日均线最新价'] > xstp_base['60日均线最新价'].fillna(float('-inf')))
             )
-        ].copy()
+            ].copy()
 
         # 添加完全多头排列标记
         filtered_df['完全多头排列'] = filtered_df.apply(
@@ -524,30 +526,32 @@ class StockAnalyzer:
 
         if not all_codes: return pd.DataFrame()
         final_df = pd.DataFrame(list(all_codes), columns=['股票代码'])
-        
+
         # 强制代码列表为字符串类型
         final_df['股票代码'] = final_df['股票代码'].astype(str)
 
         # 2. 鲁棒地合并基础信息 (简称, 价格)
         spot_df = processed_data.get('spot_data_all', pd.DataFrame())
         report_df_base = processed_data.get('processed_main_report', pd.DataFrame())
-        
+
         # 确保实时行情代码列表是字符串类型
         if '股票代码' in spot_df.columns:
-             spot_df['股票代码'] = spot_df['股票代码'].astype(str)
+            spot_df['股票代码'] = spot_df['股票代码'].astype(str)
 
         # 2a. 构建名称源：从实时行情和研报数据中收集名称 (仍以代码为基础确保唯一性)
-        name_source_spot = spot_df[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in spot_df.columns else pd.DataFrame()
-        name_source_report = report_df_base[['股票代码', '股票简称']].drop_duplicates(subset=['股票代码']) if '股票简称' in report_df_base.columns else pd.DataFrame()
+        name_source_spot = spot_df[['股票代码', '股票简称']].drop_duplicates(
+            subset=['股票代码']) if '股票简称' in spot_df.columns else pd.DataFrame()
+        name_source_report = report_df_base[['股票代码', '股票简称']].drop_duplicates(
+            subset=['股票代码']) if '股票简称' in report_df_base.columns else pd.DataFrame()
 
         # 2b. 合并所有名称源：优先使用实时行情 (spot_df) 的名称
         all_names = pd.concat([name_source_spot, name_source_report]).drop_duplicates(subset=['股票代码'], keep='first')
-        
+
         # 2c. 合并名称到最终报告 (按代码合并，保证基础表的简称是正确的)
         final_df = pd.merge(final_df, all_names, on='股票代码', how='left')
-        
+
         # --- V5 价格获取和清洗增强：按用户要求使用 '股票简称' 进行关联 ---
-        
+
         # 1. 从实时行情数据中提取用于价格合并的列 (简称和最新价)
         if '股票简称' not in spot_df.columns:
             # 严重警告：如果实时行情数据中没有股票简称，则回退到使用股票代码。
@@ -561,65 +565,64 @@ class StockAnalyzer:
             # 2. 严格筛选：对价格数据进行数值转换，并只保留非空、非零的价格
             price_source['最新价'] = pd.to_numeric(price_source['最新价'], errors='coerce')
             price_source = price_source[
-                (price_source['最新价'].notna()) & 
+                (price_source['最新价'].notna()) &
                 (price_source['最新价'] > 0)
-            ].copy()
+                ].copy()
 
             # 3. 关键修改点：根据用户要求，按 "股票简称" 进行去重（处理非唯一性问题）
             price_source = price_source.drop_duplicates(subset=[price_source_key], keep='first')
-        
+
         # 4. 移除旧的 '最新价' 列 (来自XSTP或之前的合并)
-        final_df.drop(columns=['最新价'], errors='ignore', inplace=True) 
+        final_df.drop(columns=['最新价'], errors='ignore', inplace=True)
 
         # 5. 合并价格 (使用 '股票简称' 或回退键)
         if price_source_key in final_df.columns:
-             # 确保合并键是字符串类型
-             final_df[price_source_key] = final_df[price_source_key].astype(str)
-             price_source[price_source_key] = price_source[price_source_key].astype(str)
-             
-             final_df = pd.merge(final_df, price_source, on=price_source_key, how='left')
-        
+            # 确保合并键是字符串类型
+            final_df[price_source_key] = final_df[price_source_key].astype(str)
+            price_source[price_source_key] = price_source[price_source_key].astype(str)
+
+            final_df = pd.merge(final_df, price_source, on=price_source_key, how='left')
+
         # 打印诊断信息
         valid_prices_count = final_df['最新价'].notna().sum() if '最新价' in final_df.columns else 0
-        print(f"  - 实时行情数据 (最新价) 成功通过 '{price_source_key}' 关联的有效价格数量: {valid_prices_count} / {len(final_df)}")
-        
+        print(
+            f"  - 实时行情数据 (最新价) 成功通过 '{price_source_key}' 关联的有效价格数量: {valid_prices_count} / {len(final_df)}")
+
         # 6. 填充空值
         final_df['股票简称'] = final_df['股票简称'].fillna('N/A')
         # 将价格的 NaN 填充为 'N/A'
         final_df['最新价'] = final_df['最新价'].fillna('N/A')
         # --- V5 价格获取和清洗增强结束 ---
 
-
         # 3. 合并信号和细节 (以下合并仍然使用股票代码，因为它更可靠)
         # A. 主力研报信号 (使用买入次数)
         report_df = processed_data['processed_main_report'][['股票代码', '机构投资评级(近六个月)-买入']]
         report_df.rename(columns={'机构投资评级(近六个月)-买入': '研报买入次数'}, inplace=True)
         final_df = pd.merge(final_df, report_df, on='股票代码', how='left')
-        final_df['研报买入次数'] = pd.to_numeric(final_df['研报买入次数'], errors='coerce').fillna(0).astype(int) 
+        final_df['研报买入次数'] = pd.to_numeric(final_df['研报买入次数'], errors='coerce').fillna(0).astype(int)
 
         # B. 均线信号 (多头排列)
         xstp_df = processed_data['processed_xstp_df']
         xstp_cols = ['股票代码', '完全多头排列', '当前价格', '10日均线最新价', '30日均线最新价', '60日均线最新价']
-        
+
         # V8 修复: 严格检查数据框是否包含数据和关键合并列，否则跳过合并。
         if not xstp_df.empty and '股票代码' in xstp_df.columns:
             # 1. 筛选出实际存在的列
             cols_present = [col for col in xstp_cols if col in xstp_df.columns]
-            
+
             # 2. 执行去重和合并
             # 此时 xstp_df 肯定包含 '股票代码'，所以 drop_duplicates 是安全的
             merge_df = xstp_df[cols_present].drop_duplicates(subset=['股票代码'])
-            
+
             # 3. 执行合并
             final_df = pd.merge(final_df, merge_df, on='股票代码', how='left')
-        
+
         # V9 修复：确保 '完全多头排列' 列始终存在，无论 merge 是否跳过。
         if '完全多头排列' not in final_df.columns:
             final_df['完全多头排列'] = '否'
         else:
             # 如果存在，则将合并产生的 NaN 填充为 '否'
             final_df['完全多头排列'] = final_df['完全多头排列'].fillna('否')
-
 
         # C. 资金流向 (标记前100)
         # 确保数据源非空
@@ -643,7 +646,7 @@ class StockAnalyzer:
             final_df = pd.merge(final_df, rise_df, on='股票代码', how='left').fillna({'连涨天数': 0})
         else:
             final_df['连涨天数'] = 0
-            
+
         final_df['连涨天数'] = final_df['连涨天数'].astype(int)
 
         # F. 量价齐升
@@ -660,25 +663,25 @@ class StockAnalyzer:
             final_df = pd.merge(final_df, cxfl_df, on='股票代码', how='left').fillna({'放量天数': 0})
         else:
             final_df['放量天数'] = 0
-        
+
         final_df['放量天数'] = final_df['放量天数'].astype(int)
 
         # H. TA 信号细节：现在将 TA 信号作为独立列合并 (新逻辑)
-        
+
         ta_dfs_to_merge = []
-        
+
         # 1. MACD
         macd_df = processed_data.get('MACD', pd.DataFrame())
         if not macd_df.empty:
             ta_dfs_to_merge.append(macd_df[['股票代码', 'MACD_Signal']].rename(
                 columns={'MACD_Signal': 'MACD_Signal'}))
-        
+
         # 2. KDJ
         kdj_df = processed_data.get('KDJ', pd.DataFrame())
         if not kdj_df.empty:
             ta_dfs_to_merge.append(kdj_df[['股票代码', 'KDJ_Signal']].rename(
                 columns={'KDJ_Signal': 'KDJ_Signal'}))
-                
+
         # 3. CCI
         cci_df = processed_data.get('CCI', pd.DataFrame())
         if not cci_df.empty:
@@ -694,7 +697,7 @@ class StockAnalyzer:
             rsi_df['RSI_Signal'] = rsi_df['RSI_Signal'].astype(str).str.split(' ').str[0]
             ta_dfs_to_merge.append(rsi_df[['股票代码', 'RSI_Signal']].rename(
                 columns={'RSI_Signal': 'RSI_Signal'}))
-                
+
         # 5. BOLL
         boll_df = processed_data.get('BOLL', pd.DataFrame())
         if not boll_df.empty:
@@ -712,7 +715,7 @@ class StockAnalyzer:
             else:
                 # 如果某个信号源为空，则补充空列以保持一致性
                 final_df[col] = ''
-        
+
         # 4. 过滤掉没有任何主要信号的股票
         def has_any_signal(row):
             # 这里的研报买入次数列在 run() 方法中已过滤，且在 merge 填充 NaN 为 0，故此处检查 > 0 即可
@@ -733,16 +736,16 @@ class StockAnalyzer:
         final_df.sort_values(by=['研报买入次数', '连涨天数', '放量天数'], ascending=[False, False, False], inplace=True)
         final_df.reset_index(drop=True, inplace=True)
         final_df.insert(0, '序号', range(1, len(final_df) + 1))
-        
+
         # --- V10 新增：添加股票代码搜索链接 ---
         BASE_URL = "https://www.baidu.com/s?wd="
-        
+
         # 1. 使用现成的 format_stock_code 函数将6位代码转换为完整代码 (sh/sz前缀)
         final_df['完整股票代码'] = final_df['股票代码'].apply(format_stock_code)
-        
+
         # 2. 拼接完整的搜索链接，列名改为 '股票链接'
         final_df['股票链接'] = BASE_URL + final_df['完整股票代码']
-        
+
         # 3. 移除临时列
         final_df.drop(columns=['完整股票代码'], inplace=True, errors='ignore')
         # --- V10 新增结束 ---
@@ -759,7 +762,7 @@ class StockAnalyzer:
         ]
         report_cols = [
             '研报买入次数', '完全多头排列', '10日均线最新价', '30日均线最新价', '60日均线最新价',
-            '资金流入前100', 
+            '资金流入前100',
         ]
 
         # 将新列 '股票链接' 添加到列列表的末尾
@@ -767,7 +770,7 @@ class StockAnalyzer:
         final_df = final_df[[col for col in final_cols if col in final_df.columns]]
 
         return final_df
-        
+
     def _generate_report(self, sheets_data: Dict[str, pd.DataFrame]):
         """生成 Excel 报告。"""
         print(f"\n>>> 正在生成 Excel 报告...")
@@ -829,7 +832,7 @@ class StockAnalyzer:
         print("旧的临时数据文件清理完成。")
 
         try:
-            # 1. 获取所有原始数据 
+            # 1. 获取所有原始数据
             raw_data = self._get_all_raw_data()
 
             # 预处理主力研报数据
@@ -840,11 +843,12 @@ class StockAnalyzer:
             report_col = '机构投资评级(近六个月)-买入'
             if not processed_main_report.empty and report_col in processed_main_report.columns:
                 # 确保过滤列是数字类型
-                processed_main_report[report_col] = pd.to_numeric(processed_main_report[report_col], errors='coerce').fillna(0)
-                
+                processed_main_report[report_col] = pd.to_numeric(processed_main_report[report_col],
+                                                                  errors='coerce').fillna(0)
+
                 # 过滤条件：买入评级 >= 1
                 processed_main_report = processed_main_report[processed_main_report[report_col] >= 1].copy()
-                
+
                 if processed_main_report.empty:
                     print("[WARN] 主力研报数据过滤后为空，回退至使用【A股实时行情】中的股票作为分析基础。")
                 else:
@@ -875,34 +879,37 @@ class StockAnalyzer:
             # 3. 技术指标信号提取
             ta_signals = self._process_ta_signals(filtered_codes_list, hist_df_all, spot_df)
             print(">>> 股票历史数据和技术指标分析完成。")
-            
+
             # --- V6 修复：定义统一的股票筛选集，确保最终报告只包含分析的股票 ---
-            universe_codes_set = set(filtered_codes_list) 
-            
+            universe_codes_set = set(filtered_codes_list)
+
             def filter_df_by_universe(df, universe_set):
                 """将数据框限制在核心分析股票集合内。"""
                 if df is None or df.empty or '股票代码' not in df.columns:
                     return pd.DataFrame()
                 # 确保代码类型一致，以便于集合操作
-                df['股票代码'] = df['股票代码'].astype(str) 
+                df['股票代码'] = df['股票代码'].astype(str)
                 return df[df['股票代码'].isin(universe_set)].copy()
 
             # 4. 特殊数据处理和筛选 (必须对可能引入新代码的数据进行过滤)
-            
+
             # A. 均线突破数据处理 (先处理，再对结果进行过滤)
             processed_xstp_df = self._process_xstp_and_filter(raw_data, spot_df)
             processed_xstp_df = filter_df_by_universe(processed_xstp_df, universe_codes_set)
-            
+
             # B. 过滤其他每日排名数据 (直接过滤原始数据，因为它们在 _consolidate_data 中被用作 signal source)
-            raw_data['market_fund_flow_raw'] = filter_df_by_universe(raw_data['market_fund_flow_raw'], universe_codes_set)
+            raw_data['market_fund_flow_raw'] = filter_df_by_universe(raw_data['market_fund_flow_raw'],
+                                                                     universe_codes_set)
             raw_data['strong_stocks_raw'] = filter_df_by_universe(raw_data['strong_stocks_raw'], universe_codes_set)
-            raw_data['consecutive_rise_raw'] = filter_df_by_universe(raw_data['consecutive_rise_raw'], universe_codes_set)
+            raw_data['consecutive_rise_raw'] = filter_df_by_universe(raw_data['consecutive_rise_raw'],
+                                                                     universe_codes_set)
             raw_data['ljqs_raw'] = filter_df_by_universe(raw_data['ljqs_raw'], universe_codes_set)
             raw_data['cxfl_raw'] = filter_df_by_universe(raw_data['cxfl_raw'], universe_codes_set)
-            
+
             # C. 行业板块成分股 (此表只用于报告输出，但过滤可确保一致性)
-            raw_data['top_industry_cons_df'] = filter_df_by_universe(raw_data['top_industry_cons_df'], universe_codes_set)
-            
+            raw_data['top_industry_cons_df'] = filter_df_by_universe(raw_data['top_industry_cons_df'],
+                                                                     universe_codes_set)
+
             print(f">>> 已将所有信号数据源限制在 {len(universe_codes_set)} 个核心股票代码内。")
             # --- V6 修复结束 ---
 
