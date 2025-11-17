@@ -13,7 +13,6 @@ import xlsxwriter
 # 忽略 pandas 的 SettingWithCopyWarning
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
-
 # ==============================================================================
 # 核心工具函数和配置
 # ==============================================================================
@@ -93,7 +92,6 @@ class StockAnalyzer:
             print(f"[ERROR] 保存数据到缓存 {os.path.basename(file_path)} 失败: {e}")
 
     def _safe_ak_fetch(self, fetch_func: Callable, file_base_name: str, **kwargs: Any) -> pd.DataFrame:
-        """带缓存和重试的 AKShare 数据获取封装，并保存清洗后的数据。"""
 
         # 1. 尝试从【清洗后的缓存】加载数据
         cleaned_file_path = self._get_file_path(file_base_name, cleaned=True)
@@ -140,7 +138,6 @@ class StockAnalyzer:
             if old in df.columns: df.rename(columns={old: new}, inplace=True)
 
         if '股票代码' not in df.columns:
-            # print(f"[WARN] {df_name} 数据中未找到 '股票代码' 列，跳过清洗。")
             return pd.DataFrame()
 
         # 2. 清洗数据
@@ -148,11 +145,9 @@ class StockAnalyzer:
         df.drop_duplicates(subset=['股票代码'], inplace=True)
         df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
 
-        # === 核心修复点：强制对 '最新价' 字段进行数值转换 (确保是数字类型，无效值转为 NaN) ===
         if '最新价' in df.columns:
             # 使用 errors='coerce' 将任何非数字值强制转换为 NaN，确保列类型为 float
             df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
-        # ========================================================
 
         # 3. 过滤ST股 (依赖 '股票简称' 列)
         if '股票简称' not in df.columns:
@@ -178,6 +173,8 @@ class StockAnalyzer:
             'financial_abstract_raw': self._safe_ak_fetch(ak.stock_financial_abstract, "财务摘要数据"),
             'market_fund_flow_raw': self._safe_ak_fetch(ak.stock_fund_flow_individual, "5日市场资金流向",
                                                         symbol="5日排行"),
+            'market_fund_flow_raw_10': self._safe_ak_fetch(ak.stock_fund_flow_individual, "10日市场资金流向",
+                                                        symbol="10日排行"),
             'strong_stocks_raw': self._safe_ak_fetch(ak.stock_zt_pool_strong_em, "强势股池",
                                                      date=datetime.now().strftime('%Y%m%d')),
             'consecutive_rise_raw': self._safe_ak_fetch(ak.stock_rank_lxsz_ths, "连续上涨"),
@@ -523,7 +520,7 @@ class StockAnalyzer:
         """【已按用户要求使用股票简称进行价格关联】合并所有数据源和信号，生成最终汇总报告。"""
         print("\n>>> 正在汇总所有数据和信号 (技术指标作为独立列)...")
 
-        # 1. 提取所有有信号的股票代码作为基础 (V6: 由于输入数据源已经被 run() 严格过滤，这里收集的 codes 就是最终 Universe)
+        # 1. 提取所有有信号的股票代码作为基础 (
         all_codes = set()
         data_sources = [
             processed_data.get('processed_main_report'),
@@ -644,25 +641,41 @@ class StockAnalyzer:
             # 如果存在，则将合并产生的 NaN 填充为 '否'
             final_df['完全多头排列'] = final_df['完全多头排列'].fillna('否')
 
-        # C. 资金流向 (标记前100)
-        # 确保数据源非空
+        # C. 资金流向-5day
 
         fund_flow_df = processed_data.get('market_fund_flow_raw', pd.DataFrame())
 
         # 检查数据源是否为空且包含必要的列
-        if not fund_flow_df.empty and '股票代码' in fund_flow_df.columns and '资金流入净额' in fund_flow_df.columns:
+        if not fund_flow_df.empty and '股票简称' in fund_flow_df.columns and '资金流入净额' in fund_flow_df.columns:
             # 1. 提取股票代码和资金流入净额
-            merge_df = fund_flow_df[['股票代码', '资金流入净额']].drop_duplicates(subset=['股票代码'])
+            merge_df = fund_flow_df[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
 
             # 2. 合并到 final_df
-            final_df = pd.merge(final_df, merge_df, on='股票代码', how='left')
+            final_df = pd.merge(final_df, merge_df, on='股票简称', how='left')
 
-            # 3. 填充 NaN 为 0.0 (资金净额是金额，填充 0.0 更合理)
             # 确保列名为 '资金流入净额' 且为数值类型
-            final_df['资金流入净额'] = pd.to_numeric(final_df['资金流入净额'], errors='coerce').fillna(0.0)
+            final_df['5日资金流入'] = final_df['资金流入净额']
         else:
             # 如果数据源缺失，则创建空列并填充 0.0
-            final_df['资金流入净额'] = 0.0
+            final_df['5日资金流入'] = ''
+
+            # C. 资金流向-10day
+
+            fund_flow_df = processed_data.get('market_fund_flow_raw_10', pd.DataFrame())
+
+            # 检查数据源是否为空且包含必要的列
+            if not fund_flow_df.empty and '股票简称' in fund_flow_df.columns and '资金流入净额' in fund_flow_df.columns:
+                # 1. 提取股票代码和资金流入净额
+                merge_df = fund_flow_df[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
+
+                # 2. 合并到 final_df
+                final_df = pd.merge(final_df, merge_df, on='股票简称', how='left')
+
+                # 确保列名为 '资金流入净额' 且为数值类型
+                final_df['10日资金流入'] = final_df['资金流入净额']
+            else:
+                # 如果数据源缺失，则创建空列并填充 0.0
+                final_df['10日资金流入'] = ''
 
         # D. 强势股池
         if not processed_data['strong_stocks_raw'].empty:
@@ -769,20 +782,14 @@ class StockAnalyzer:
         final_df.reset_index(drop=True, inplace=True)
         final_df.insert(0, '序号', range(1, len(final_df) + 1))
 
-        # --- V10 新增：添加股票代码搜索链接 ---
-        BASE_URL = "https://www.baidu.com/s?wd="
-
-        # 1. 使用现成的 format_stock_code 函数将6位代码转换为完整代码 (sh/sz前缀)
         final_df['完整股票代码'] = final_df['股票代码'].apply(format_stock_code)
-
-        # 2. 拼接完整的搜索链接，列名改为 '股票链接'
-        final_df['股票链接'] = BASE_URL + final_df['完整股票代码']
+        final_df['股票链接'] = "https://hybrid.gelonghui.com/stock-check/" + final_df['完整股票代码']
 
         # 3. 移除临时列
         final_df.drop(columns=['完整股票代码'], inplace=True, errors='ignore')
-        # --- V10 新增结束 ---
 
-        # 移除可能重复的 Current Price/Latest Price columns if they came from XSTP merge.
+
+
         if '当前价格' in final_df.columns and '最新价' in final_df.columns:
             final_df.drop(columns=['当前价格'], inplace=True, errors='ignore')
 
@@ -794,7 +801,7 @@ class StockAnalyzer:
         ]
         report_cols = [
             '研报买入次数', '完全多头排列', '10日均线最新价', '30日均线最新价', '60日均线最新价',
-            '资金流入前100',
+            '5日资金流入','10日资金流入'
         ]
 
         # 将新列 '股票链接' 添加到列列表的末尾
@@ -899,7 +906,6 @@ class StockAnalyzer:
                 return
 
             filtered_codes_list = list(all_codes)
-            # --- 核心筛选逻辑结束 ---
 
             if not filtered_codes_list:
                 print("未找到任何有效的股票代码，流程终止。")
@@ -912,24 +918,19 @@ class StockAnalyzer:
             ta_signals = self._process_ta_signals(filtered_codes_list, hist_df_all, spot_df)
             print(">>> 股票历史数据和技术指标分析完成。")
 
-            # --- V6 修复：定义统一的股票筛选集，确保最终报告只包含分析的股票 ---
-            universe_codes_set = set(filtered_codes_list)
 
+            universe_codes_set = set(filtered_codes_list)
             def filter_df_by_universe(df, universe_set):
-                """将数据框限制在核心分析股票集合内。"""
                 if df is None or df.empty or '股票代码' not in df.columns:
                     return pd.DataFrame()
-                # 确保代码类型一致，以便于集合操作
                 df['股票代码'] = df['股票代码'].astype(str)
                 return df[df['股票代码'].isin(universe_set)].copy()
 
-            # 4. 特殊数据处理和筛选 (必须对可能引入新代码的数据进行过滤)
-
-            # A. 均线突破数据处理 (先处理，再对结果进行过滤)
+            # A. 均线突破数据处理
             processed_xstp_df = self._process_xstp_and_filter(raw_data, spot_df)
             processed_xstp_df = filter_df_by_universe(processed_xstp_df, universe_codes_set)
 
-            # B. 过滤其他每日排名数据 (直接过滤原始数据，因为它们在 _consolidate_data 中被用作 signal source)
+            # B. 过滤其他每日排名数据
             raw_data['market_fund_flow_raw'] = filter_df_by_universe(raw_data['market_fund_flow_raw'],
                                                                      universe_codes_set)
             raw_data['strong_stocks_raw'] = filter_df_by_universe(raw_data['strong_stocks_raw'], universe_codes_set)
@@ -942,17 +943,14 @@ class StockAnalyzer:
             raw_data['top_industry_cons_df'] = filter_df_by_universe(raw_data['top_industry_cons_df'],
                                                                      universe_codes_set)
 
-            print(f">>> 已将所有信号数据源限制在 {len(universe_codes_set)} 个核心股票代码内。")
-            # --- V6 修复结束 ---
-
             # 5. 合并所有数据源和信号
             processed_data = {
                 **raw_data,
                 **ta_signals,  # 技术指标信号
                 'processed_xstp_df': processed_xstp_df,
-                'processed_main_report': processed_main_report  # 使用过滤后的结果
+                'processed_main_report': processed_main_report
             }
-            # 替换评分环节，改为数据整合
+
             consolidated_report = self._consolidate_data(processed_data)
 
             # 6. 准备报告数据
@@ -962,6 +960,7 @@ class StockAnalyzer:
                 '均线多头排列': processed_xstp_df,  # 使用处理后且过滤后的数据
                 '实时行情': spot_df,  # 使用清洗后的数据
                 '5日市场资金流向': raw_data['market_fund_flow_raw'],
+                '10日市场资金流向': raw_data['market_fund_flow_raw_10'],
                 '强势股池': raw_data['strong_stocks_raw'],
                 '连续上涨': raw_data['consecutive_rise_raw'],
                 '量价齐升': raw_data['ljqs_raw'],
@@ -985,8 +984,6 @@ class StockAnalyzer:
             end_time = time.time()
             print(f"\n>>> 流程结束。总耗时: {timedelta(seconds=end_time - self.start_time)}")
 
-
 if __name__ == "__main__":
-    # 这是程序的入口点，确保在文件作为脚本运行时，StockAnalyzer被创建并执行
     analyzer = StockAnalyzer()
     analyzer.run()
