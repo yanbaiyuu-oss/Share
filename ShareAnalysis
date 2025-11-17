@@ -13,6 +13,7 @@ import xlsxwriter
 # 忽略 pandas 的 SettingWithCopyWarning
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
+
 # ==============================================================================
 # 核心工具函数和配置
 # ==============================================================================
@@ -174,7 +175,7 @@ class StockAnalyzer:
             'market_fund_flow_raw': self._safe_ak_fetch(ak.stock_fund_flow_individual, "5日市场资金流向",
                                                         symbol="5日排行"),
             'market_fund_flow_raw_10': self._safe_ak_fetch(ak.stock_fund_flow_individual, "10日市场资金流向",
-                                                        symbol="10日排行"),
+                                                           symbol="10日排行"),
             'market_fund_flow_raw_20': self._safe_ak_fetch(ak.stock_fund_flow_individual, "20日市场资金流向",
                                                            symbol="20日排行"),
             'strong_stocks_raw': self._safe_ak_fetch(ak.stock_zt_pool_strong_em, "强势股池",
@@ -243,7 +244,7 @@ class StockAnalyzer:
         for future in as_completed(future_to_industry):
             industry_name = future_to_industry[future]
             try:
-                constituents_df = future.result() # 这里的 result 是已经尝试重试后的结果
+                constituents_df = future.result()  # 这里的 result 是已经尝试重试后的结果
                 if constituents_df is not None and not constituents_df.empty:
                     if '代码' in constituents_df.columns:
                         constituents_df.rename(columns={'代码': '股票代码'}, inplace=True)
@@ -257,7 +258,8 @@ class StockAnalyzer:
                         cleaned_constituents = constituents_df[['股票代码', '所属板块']].drop_duplicates()
                     all_constituents.append(cleaned_constituents)
                 else:
-                    print(f"[WARN] 警告：获取 {industry_name} 的成分股失败或数据为空 (已重试 {self.config.DATA_FETCH_RETRIES} 次)。")
+                    print(
+                        f"[WARN] 警告：获取 {industry_name} 的成分股失败或数据为空 (已重试 {self.config.DATA_FETCH_RETRIES} 次)。")
 
             except Exception as e:
                 # 理论上这里的 Exception 应该很少触发，因为重试逻辑已经在 _safe_fetch_constituents 中处理
@@ -361,18 +363,18 @@ class StockAnalyzer:
             return df
 
         close = df['close']
-        
+
         # 定义需要计算的MACD周期组合
         macd_periods = {
             '12269': (12, 26, 9),  # 标准中长线周期
-            '6135': (6, 13, 5)     # 短线/加速周期
+            '6135': (6, 13, 5)  # 短线/加速周期
         }
 
         for name, (fast, slow, signal) in macd_periods.items():
             # 1. 计算快线和慢线
             ema_fast_col = f'EMA_{fast}_{name}'
             ema_slow_col = f'EMA_{slow}_{name}'
-            
+
             # adjust=False 确保权重符合技术分析的传统公式
             df[ema_fast_col] = close.ewm(span=fast, adjust=False).mean()
             df[ema_slow_col] = close.ewm(span=slow, adjust=False).mean()
@@ -387,19 +389,20 @@ class StockAnalyzer:
 
             # 4. 判断 MACD 金叉信号 (DIF 上穿 DEA)
             cross_col = f'MACD_{name}_CROSS'
-            
+
             # 条件：当前 DIF > DEA 且 前一日 DIF <= DEA
             df[cross_col] = np.where(
-                (df[dif_col] > df[dea_col]) & 
-                (df[dif_col].shift(1).fillna(0) <= df[dea_col].shift(1).fillna(0)), 
+                (df[dif_col] > df[dea_col]) &
+                (df[dif_col].shift(1).fillna(0) <= df[dea_col].shift(1).fillna(0)),
                 1, 0
             )
 
             # 5. 清理中间计算列
-            df.drop(columns=[ema_fast_col, ema_slow_col, dif_col, dea_col], 
+            df.drop(columns=[ema_fast_col, ema_slow_col, dif_col, dea_col],
                     inplace=True, errors='ignore')
 
         return df
+
     # ==========================================================================
 
     def _save_ta_signals_to_txt(self, ta_signals: Dict[str, pd.DataFrame]):
@@ -425,7 +428,6 @@ class StockAnalyzer:
                 print(f"  - 成功保存 {indicator_name} 信号文件: {file_name}")
             except Exception as e:
                 print(f"[ERROR] 保存 {indicator_name} 信号文件失败: {e}")
-
 
     def _process_ta_signals(self, all_codes: List[str], hist_df_all: pd.DataFrame, spot_df: pd.DataFrame) -> Dict[
         str, pd.DataFrame]:
@@ -477,7 +479,6 @@ class StockAnalyzer:
                     if df['MACD_6135_CROSS'].iloc[-1] == 1:
                         ta_signals['MACD_6135'].append({'股票代码': code, 'MACD_6135_Signal': '金叉'})
                 # --- MACD 自定义计算结束 ---
-
 
                 # 2. KDJ (超卖区金叉) - 使用 pandas_ta
                 df.ta.stoch(append=True, close='close', high='high', low='low')
@@ -611,7 +612,7 @@ class StockAnalyzer:
             processed_data.get('ljqs_raw'),
             processed_data.get('cxfl_raw'),
             processed_data.get('MACD_12269', pd.DataFrame()),  # MACD 标准周期
-            processed_data.get('MACD_6135', pd.DataFrame()),   # MACD 加速周期
+            processed_data.get('MACD_6135', pd.DataFrame()),  # MACD 加速周期
             processed_data.get('KDJ', pd.DataFrame()),
             processed_data.get('CCI', pd.DataFrame()),
             processed_data.get('RSI', pd.DataFrame()),
@@ -731,20 +732,18 @@ class StockAnalyzer:
             final_df['5日资金流入'] = final_df['资金流入净额']
             final_df.drop(columns=['资金流入净额'], errors='ignore', inplace=True)
 
-
         fund_flow_df_10 = processed_data.get('market_fund_flow_raw_10', pd.DataFrame())
         if not fund_flow_df_10.empty and '股票简称' in fund_flow_df_10.columns and '资金流入净额' in fund_flow_df_10.columns:
-                merge_df_10 = fund_flow_df_10[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
-                final_df = pd.merge(final_df, merge_df_10, on='股票简称', how='left')
-                final_df['10日资金流入'] = final_df['资金流入净额']
-                final_df.drop(columns=['资金流入净额'], errors='ignore', inplace=True)
+            merge_df_10 = fund_flow_df_10[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
+            final_df = pd.merge(final_df, merge_df_10, on='股票简称', how='left')
+            final_df['10日资金流入'] = final_df['资金流入净额']
+            final_df.drop(columns=['资金流入净额'], errors='ignore', inplace=True)
 
         fund_flow_df_20 = processed_data.get('market_fund_flow_raw_20', pd.DataFrame())
         if not fund_flow_df_20.empty and '股票简称' in fund_flow_df_20.columns and '资金流入净额' in fund_flow_df_20.columns:
-                merge_df_20 = fund_flow_df_20[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
-                final_df = pd.merge(final_df, merge_df_20, on='股票简称', how='left')
-                final_df['20日资金流入'] = final_df['资金流入净额']
-
+            merge_df_20 = fund_flow_df_20[['股票简称', '资金流入净额']].drop_duplicates(subset=['股票简称'])
+            final_df = pd.merge(final_df, merge_df_20, on='股票简称', how='left')
+            final_df['20日资金流入'] = final_df['资金流入净额']
 
         # D. 强势股池
         if not processed_data['strong_stocks_raw'].empty:
@@ -788,13 +787,13 @@ class StockAnalyzer:
         macd_df_standard = processed_data.get('MACD_12269', pd.DataFrame())
         if not macd_df_standard.empty:
             ta_dfs_to_merge.append(macd_df_standard[['股票代码', 'MACD_12269_Signal']].rename(
-                columns={'MACD_12269_Signal': 'MACD_12269'})) # 重命名为 MACD_12269
+                columns={'MACD_12269_Signal': 'MACD_12269'}))  # 重命名为 MACD_12269
 
         # 2. MACD 6135 (加速周期) - 【列名修改点 2】
         macd_df_fast = processed_data.get('MACD_6135', pd.DataFrame())
         if not macd_df_fast.empty:
             ta_dfs_to_merge.append(macd_df_fast[['股票代码', 'MACD_6135_Signal']].rename(
-                columns={'MACD_6135_Signal': 'MACD_6135'})) # 重命名为 MACD_6135
+                columns={'MACD_6135_Signal': 'MACD_6135'}))  # 重命名为 MACD_6135
 
         # 3. KDJ
         kdj_df = processed_data.get('KDJ', pd.DataFrame())
@@ -843,8 +842,8 @@ class StockAnalyzer:
                     row['完全多头排列'] == '是' or
                     row['强势股'] == '是' or
                     row['量价齐升'] == '是' or
-                    row['MACD_12269'] != '' or # 【列名检查点】
-                    row['MACD_6135'] != '' or # 【列名检查点】
+                    row['MACD_12269'] != '' or  # 【列名检查点】
+                    row['MACD_6135'] != '' or  # 【列名检查点】
                     row['KDJ_Signal'] != '' or
                     row['CCI_Signal'] != '' or
                     row['RSI_Signal'] != '' or
@@ -864,8 +863,6 @@ class StockAnalyzer:
         # 3. 移除临时列
         final_df.drop(columns=['完整股票代码'], inplace=True, errors='ignore')
 
-
-
         if '当前价格' in final_df.columns and '最新价' in final_df.columns:
             final_df.drop(columns=['当前价格'], inplace=True, errors='ignore')
 
@@ -877,7 +874,7 @@ class StockAnalyzer:
         ]
         report_cols = [
             '研报买入次数', '完全多头排列', '10日均线最新价', '30日均线最新价', '60日均线最新价',
-            '5日资金流入','10日资金流入','20日资金流入'
+            '5日资金流入', '10日资金流入', '20日资金流入'
         ]
 
         # 将新列 '股票链接' 添加到列列表的末尾
@@ -998,6 +995,7 @@ class StockAnalyzer:
             self._save_ta_signals_to_txt(ta_signals)
 
             universe_codes_set = set(filtered_codes_list)
+
             def filter_df_by_universe(df, universe_set):
                 if df is None or df.empty or '股票代码' not in df.columns:
                     return pd.DataFrame()
@@ -1044,7 +1042,7 @@ class StockAnalyzer:
                 '连续上涨': raw_data['consecutive_rise_raw'],
                 '量价齐升': raw_data['ljqs_raw'],
                 '持续放量': raw_data['cxfl_raw'],
-                'MACD_12269金叉': ta_signals.get('MACD_12269', pd.DataFrame()), # 增加标准周期表格
+                'MACD_12269金叉': ta_signals.get('MACD_12269', pd.DataFrame()),  # 增加标准周期表格
                 'MACD_6135金叉': ta_signals.get('MACD_6135', pd.DataFrame()),  # 增加加速周期表格
                 'KDJ超卖金叉': ta_signals.get('KDJ', pd.DataFrame()),
                 'CCI超卖': ta_signals.get('CCI', pd.DataFrame()),
@@ -1063,6 +1061,7 @@ class StockAnalyzer:
         finally:
             end_time = time.time()
             print(f"\n>>> 流程结束。总耗时: {timedelta(seconds=end_time - self.start_time)}")
+
 
 if __name__ == "__main__":
     analyzer = StockAnalyzer()
